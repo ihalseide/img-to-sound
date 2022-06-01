@@ -1,16 +1,21 @@
+/* Convert an image to audio.
+ * Audio format: signed 8-bit, 48KHz sample rate
+ */
+
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>
+#include <unistd.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+
+#define DEFAULT_SAMPLE_RATE 48000
+#define DEFAULT_PX_PER_MIN 240
 
 enum {
     WAVE_SINE,
     WAVE_SAW,
 };
-
-/* Convert an image to audio.
- * Audio format: signed 8-bit, 48KHz */
 
 // convert piano key number to frequency
 float key_to_frequency(int n)
@@ -98,9 +103,6 @@ void generate_samples(float *o, int w, float t, float f, float a, unsigned int r
 int process(char *in_filename, char *out_filename, int rate, int spp)
 {
     const float tpp = (float)spp / rate;
-    printf(
-            "converting %s to %s with sample rate of %dHz where each pixel is %fs long\n",
-            in_filename, out_filename, rate, tpp);
     // load image
     // width, height, num. of channels
     int w, h, n;
@@ -136,7 +138,7 @@ int process(char *in_filename, char *out_filename, int rate, int spp)
                 fprintf(stderr, "note: maximum number of notes (%d) placed at one time at x = %d\n", max_notes, x);
                 break;
             }
-            int i = y * w * n + x;
+            int i = (y * w + x) * n;
             char r = data[i + 0];
             char g = data[i + 1];
             char b = data[i + 2];
@@ -185,22 +187,88 @@ int process(char *in_filename, char *out_filename, int rate, int spp)
     return 0;
 }
 
+void print_usage(char *program)
+{
+    printf(
+        "usage:\n"
+        "    %s -h\n"
+        "    %s -i filename -o filename [-r rate] [-p ppm] \n"
+        "Where\n"
+        "    -r rate    sets the sample rate in Hertz, (integer value), default value is %d\n"
+        "    -p ppm     sets the pixels per minute (integer value), default value is %d\n",
+        program, program, DEFAULT_SAMPLE_RATE, DEFAULT_PX_PER_MIN);
+}
+
+// Calculate samples per pixel
+// sr = sample rate
+// ppm = pixels/beats per minute
+int calc_spp(unsigned int sr, unsigned int ppm)
+{
+    assert(sr != 0);
+    assert(ppm != 0);
+    float pps = (float)ppm / 60.0; // pixel per second
+    return sr / pps;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc > 3)
+    char *in_filename = NULL;
+    char *out_filename = NULL;
+    unsigned int sr = DEFAULT_SAMPLE_RATE; // default sample rate
+    unsigned int ppm = DEFAULT_PX_PER_MIN;  // default pixels per minute
+    // parse options
+    int opt;
+    char *prog = (argc && argv)? argv[0] : NULL;
+    while ((opt = getopt(argc, argv, "hi:o:r:p:")) != -1)
     {
-        fprintf(stderr, "too many arguments\n");
+        switch (opt)
+        {
+            case 'h':
+                print_usage(prog);
+                return 0;
+            case 'i':
+                // input file
+                in_filename = optarg;
+                break;
+            case 'o':
+                // output file
+                out_filename = optarg;
+                break;
+            case 'r':
+                // sample rate (optional)
+                sr = atoi(optarg);
+                if (sr <= 0)
+                {
+                    fprintf(stderr, "%s: error: -r argument %d is not greater than zero\n", prog, sr);
+                    return 1;
+                }
+                break;
+            case 'p':
+                // pixels per minute (optional)
+                ppm = atoi(optarg);
+                if (ppm <= 0)
+                {
+                    fprintf(stderr, "%s: error: -p argument %d is not greater than zero\n", prog, ppm);
+                    return 1;
+                }
+                break;
+            default:
+                return 1;
+        }
+    }
+    if (!in_filename)
+    {
+        fprintf(stderr, "%s: error: missing input filename argument\n", prog);
+        print_usage(prog);
         return 1;
     }
-    if (argc < 3)
+    if (!out_filename)
     {
-        fprintf(stderr, "missing file name argument\n");
+        fprintf(stderr, "%s: error: missing output filename argument\n", prog);
+        print_usage(prog);
         return 1;
     }
-    char *in_filename = argv[1];
-    char *out_filename = argv[2];
-    int sample_rate = 48000;
-    int per_pixel = sample_rate / 32;
-    return process(in_filename, out_filename, sample_rate, per_pixel);
+    unsigned int spp = calc_spp(sr, ppm); // samples per pixel
+    return process(in_filename, out_filename, sr, spp);
 }
 
