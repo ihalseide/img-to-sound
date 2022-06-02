@@ -39,7 +39,7 @@ float sine(float t, float f)
 {
     assert(!isnan(t));
     assert(!isnan(f));
-    return 0.5 * (1 + sin(f * t));
+    return sin(f*2 * t);
 }
 
 // convert an RGB color value to an amplitude between 0 and 1.0
@@ -158,6 +158,7 @@ int process(char *in_filename, char *out_filename, int rate, int spp, int start_
             notes++;
             int key = num_keys - y;
             float f = key_to_frequency(key);
+            //printf("f: %f\n", f);
             float a = color_to_amplitude(r, g, b) / max_notes;
             int w = color_to_wave(r, g, b);
             float *place_buffer = malloc(spp * sizeof(float));
