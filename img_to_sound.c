@@ -1,4 +1,5 @@
 /* IMG_TO_SOUND : convert an image to music.
+ *
  * Copyright (C) 2022 Izak Nathanael Halseide
  * 
  * This program is free software: you can redistribute it and/or modify
@@ -114,11 +115,19 @@ void generate_samples(float *o, int w, float t, float f, float a, unsigned int r
 // out_filename = name of output file to create
 // r = sample rate
 // tpp = time per pixel
-// start_x = x to start at in the image
+// ox = offset x
+// oy = offset y
+// v = verbose flag
 // returns non-zero if there is an error
-int process(char *in_filename, char *out_filename, int rate, int spp, int start_x)
+int process(
+        char *in_filename, char *out_filename, unsigned int rate, unsigned int spp,
+        unsigned int ox, unsigned int oy, char v)
 {
-    const float tpp = (float)spp / rate;
+    assert(in_filename);
+    assert(out_filename);
+    assert(rate);
+    assert(spp);
+    const float tpp = (float)spp / rate; // time per pixel
     // load image
     // width, height, num. of channels
     int w, h, n;
@@ -129,9 +138,17 @@ int process(char *in_filename, char *out_filename, int rate, int spp, int start_
         return 1;
     }
 
-    if (w <= start_x)
+    if (v) fprintf(stderr, "input image size is %dx%d\n", w, h);
+
+    // check starting offsets
+    if (w <= ox)
     {
-        fprintf(stderr, "start x (%d) is larger than the image width (%d)\n", start_x, w);
+        fprintf(stderr, "start x (%d) is larger than the image width (%d)\n", ox, w);
+        return 1;
+    }
+    if (h <= oy)
+    {
+        fprintf(stderr, "start y (%d) is larger than the image height (%d)\n", oy, h);
         return 1;
     }
 
@@ -148,12 +165,12 @@ int process(char *in_filename, char *out_filename, int rate, int spp, int start_
     // process each pixel
     const int num_keys = 88;
     const int max_notes = 12; // maximum notes to play at once (inclusive)
-    const int max_y = (h < num_keys)? h : num_keys;
-    for (int x = start_x; x < w; x++)
+    const int end_y = (h - oy < num_keys)? h : (oy + num_keys);
+    for (int x = ox; x < w; x++)
     {
         float *col_buffer = calloc(spp, sizeof(float));
         int notes = 0;
-        for (int y = 0; y < max_y; y++)
+        for (int y = oy; y < end_y; y++)
         {
             if (notes > max_notes)
             {
@@ -171,7 +188,7 @@ int process(char *in_filename, char *out_filename, int rate, int spp, int start_
             }
             // add a note
             notes++;
-            int key = num_keys - y;
+            int key = num_keys - (y - oy);
             float f = key_to_frequency(key);
             //printf("f: %f\n", f);
             float a = color_to_amplitude(r, g, b) / max_notes;
@@ -217,9 +234,13 @@ void print_usage(FILE *fp, char *program)
         "    %s [OPTIONS] file-in file-out\n"
         "Options:\n"
         "    -h         show the help mesage\n"
-        "    -r rate    sets the sample rate in Hertz, (integer value), default value is %d\n"
-        "    -p ppm     sets the pixels per minute (integer value), default value is %d\n"
-        "    -x start   ignores the left side of the image until the given x column number (starts at 1)\n",
+        "    -v         print out information (verbose)\n"
+        "    -o file    output audio to file\n"
+        "    -r rate    set the sample rate in Hertz (default is %d)\n"
+        "    -p ppm     set the pixels per minute, also know as tempo, (default is %d)\n"
+        "    -x offset  ignore the first <offset> X columns of the image (default is 0)\n"
+        "    -y offset  ignore the first <offset> Y rows of the image (default is 0)\n"
+        "NOTE: All options that take arguments take integer arguments.\n",
         program, DEFAULT_SAMPLE_RATE, DEFAULT_PX_PER_MIN);
 }
 
@@ -238,13 +259,15 @@ int main(int argc, char **argv)
 {
     char *in_filename = NULL;
     char *out_filename = NULL;
+    char v = 0; // verbose flag
     unsigned int x = 0;
+    unsigned int y = 0;
     unsigned int sr = DEFAULT_SAMPLE_RATE; // default sample rate
     unsigned int ppm = DEFAULT_PX_PER_MIN;  // default pixels per minute
     // parse options
     int opt;
     char *prog = (argc && argv)? argv[0] : NULL;
-    while ((opt = getopt(argc, argv, "hr:p:x:")) != -1)
+    while ((opt = getopt(argc, argv, "hvr:p:x:y:o:")) != -1)
     {
         switch (opt)
         {
@@ -253,12 +276,17 @@ int main(int argc, char **argv)
                 fprintf(stdout, "Converts an image file input to an audio file output.\n");
                 print_usage(stdout, prog);
                 return 0;
+            case 'v':
+                // verbose
+                v = 1; 
+                fprintf(stderr, "verbose\n");
+                break;
             case 'r':
                 // sample rate
                 sr = atoi(optarg);
                 if (sr <= 0)
                 {
-                    fprintf(stderr, "%s: error: -r argument %d is not greater than zero\n", prog, sr);
+                    fprintf(stderr, "%s: error: -r argument %d must be greater than zero\n", prog, sr);
                     return 1;
                 }
                 break;
@@ -267,32 +295,50 @@ int main(int argc, char **argv)
                 ppm = atoi(optarg);
                 if (ppm <= 0)
                 {
-                    fprintf(stderr, "%s: error: -p argument %d is not greater than zero\n", prog, ppm);
+                    fprintf(stderr, "%s: error: -p argument %d must be greater than zero\n", prog, ppm);
                     return 1;
                 }
                 break;
             case 'x':
                 // starting x offset in image
                 x = atoi(optarg);
-                if (ppm < 1)
+                if (x < 0)
                 {
-                    fprintf(stderr, "%s: error: -x argument %d is less than 1\n", prog, ppm);
+                    fprintf(stderr, "%s: error: -x argument %d cannot be negative\n", prog, x);
                     return 1;
                 }
+                break;
+            case 'y':
+                // starting y offset in image
+                y = atoi(optarg);
+                if (y < 0)
+                {
+                    fprintf(stderr, "%s: error: -y argument %d cannot be negative\n", prog, y);
+                    return 1;
+                }
+                break;
+            case 'o':
+                // output filename
+                out_filename = optarg;
                 break;
             default:
                 return 1;
         }
     }
-    if (argc - optind < 2)
+    // get required file input
+    if (argc - optind < 1)
     {
         fprintf(stderr, "%s: error: missing required arguments\n", prog);
         print_usage(stderr, prog);
         return 1;
     }
     in_filename = argv[optind];
-    out_filename = argv[optind + 1];
+    // run!
     unsigned int spp = calc_spp(sr, ppm); // samples per pixel
-    return process(in_filename, out_filename, sr, spp, x - 1);
+    if (!out_filename)
+    {
+        printf("audio samples per pixel: %d\n", spp);
+    }
+    return process(in_filename, out_filename, sr, spp, x, y, v);
 }
 
