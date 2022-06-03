@@ -20,6 +20,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 #include <unistd.h>
 #define STB_IMAGE_IMPLEMENTATION
@@ -31,6 +32,8 @@
 enum {
     WAVE_SINE,
     WAVE_SAW,
+    WAVE_TRIANGLE,
+    WAVE_SQUARE,
 };
 
 // convert piano key number to frequency
@@ -45,17 +48,27 @@ float key_to_frequency(int n)
 // f = frequency
 float saw(float t, float f)
 {
-    assert(!isnan(t));
-    assert(!isnan(f));
     float x = t * f;
     return x - floorf(x) - 0.5;
 }
 
+// sample sine wave
 float sine(float t, float f)
 {
-    assert(!isnan(t));
-    assert(!isnan(f));
-    return sin(f*2 * t);
+    return sin(2*f*t);
+}
+
+// sample triangle wave
+float triangle(float t, float f)
+{
+    return 2 * fabs(saw(t, f)) - 0.5;
+}
+
+// sample square wave
+float square(float t, float f)
+{
+    float x = f*t;
+    return 4*floorf(x) - 2*floorf(2*x) + 1;
 }
 
 // convert an RGB color value to an amplitude between 0 and 1.0
@@ -68,12 +81,17 @@ float color_to_amplitude(unsigned char r, unsigned char g, unsigned char b)
     return (float)x / 255.0;
 }
 
+// choose a waveform based on the color
+// <dominant color → waveform>
+//     red → sine
+//     blue → triangle
+//     green → square
+//     otherwise → sawtooth
 int color_to_wave(unsigned char r, unsigned char g, unsigned char b)
 {
-    if (r > g && r > b)
-    {
-        return WAVE_SINE;
-    }
+    if (r > g && r > b) return WAVE_SINE;
+    if (g > r && g > b) return WAVE_SQUARE;
+    if (b > r && b > g) return WAVE_TRIANGLE;
     return WAVE_SAW;
 }
 
@@ -84,31 +102,68 @@ int color_to_wave(unsigned char r, unsigned char g, unsigned char b)
 // a = amplitude
 // r = sample Rate
 // s = number of samples
-void generate_samples(float *o, int w, float t, float f, float a, unsigned int r, unsigned int s)
+void generate_samples(
+        float *o, int w, float t0, float f, float a,
+        unsigned int r, unsigned int s)
 {
-    assert(!isnan(t));
-    assert(!isnan(f));
-    assert(!isnan(a));
     float dt = 1.0 / r;
-    assert(!isnan(dt));
     for (int i = 0; i < s; i++)
     {
-        float rt = t + dt * i;
+        float t = t0 + dt * i;
         float x;
         switch (w)
         {
             case WAVE_SINE:
-                x = sine(rt, f);
+                x = sine(t, f);
+                break;
+            case WAVE_TRIANGLE:
+                x = triangle(t, f);
+                break;
+            case WAVE_SQUARE:
+                x = square(t, f);
                 break;
             case WAVE_SAW:
+                x = saw(t, f);
+                break;
             default:
-                x = saw(rt, f);
+                assert(0 && "invalid wave kind");
                 break;
         }
-        assert(!isnan(x));
         x *= a;
         o[i] = x;
     }
+}
+
+int process_check(
+        char *in_filename, char *out_filename, unsigned int rate,
+        unsigned int spp, char v)
+{
+    if (strcmp(in_filename, out_filename) == 0)
+    {
+        if (v) fprintf(stderr, "input filename and output filename must be different\n");
+        return 1;
+    }
+    if (!in_filename) 
+    {
+        if (v) fprintf(stderr, "invalid input filename\n");
+        return 1;
+    }
+    if (!out_filename)
+    {
+        if (v) fprintf(stderr, "invalid output filename\n");
+        return 1;
+    }
+    if (!rate)
+    {
+        if (v) fprintf(stderr, "invalid rate\n");
+        return 1;
+    }
+    if (!spp)
+    {
+        if (v) fprintf(stderr, "invalid samples per pixel\n");
+        return 1;
+    }
+    return 0;
 }
 
 // in_filename = name of input image file
@@ -120,14 +175,16 @@ void generate_samples(float *o, int w, float t, float f, float a, unsigned int r
 // v = verbose flag
 // returns non-zero if there is an error
 int process(
-        char *in_filename, char *out_filename, unsigned int rate, unsigned int spp,
-        unsigned int ox, unsigned int oy, char v)
+        char *in_filename, char *out_filename, unsigned int rate,
+        unsigned int spp, unsigned int ox, unsigned int oy, char v)
 {
-    assert(in_filename);
-    assert(out_filename);
-    assert(rate);
-    assert(spp);
+    if (process_check(in_filename, out_filename, rate, spp, v))
+        return 1;
+
     const float tpp = (float)spp / rate; // time per pixel
+    if (v)
+        fprintf(stderr, "time per pixel: %fs\n", tpp);
+
     // load image
     // width, height, num. of channels
     int w, h, n;
@@ -138,7 +195,8 @@ int process(
         return 1;
     }
 
-    if (v) fprintf(stderr, "input image size is %dx%d\n", w, h);
+    if (v)
+        fprintf(stderr, "input image size is %dx%d\n", w, h);
 
     // check starting offsets
     if (w <= ox)
@@ -151,6 +209,8 @@ int process(
         fprintf(stderr, "start y (%d) is larger than the image height (%d)\n", oy, h);
         return 1;
     }
+
+    if (v) fprintf(stderr, "output length will be %fs long\n", w * tpp);
 
     // audio output file
     FILE *out = fopen(out_filename, "w+");
@@ -174,7 +234,10 @@ int process(
         {
             if (notes > max_notes)
             {
-                fprintf(stderr, "note: maximum number of notes (%d) placed at one time at x = %d\n", max_notes, x);
+                fprintf(
+                        stderr,
+                        "note: maximum number of notes (%d) placed at one time at x = %d\n",
+                        max_notes, x);
                 break;
             }
             int i = (y * w + x) * n;
@@ -193,6 +256,7 @@ int process(
             //printf("f: %f\n", f);
             float a = color_to_amplitude(r, g, b) / max_notes;
             int w = color_to_wave(r, g, b);
+            //printf("w:%d\n",w);
             float *place_buffer = malloc(spp * sizeof(float));
             generate_samples(place_buffer, w, t, f, a, rate, spp);
             for (int i = 0; i < spp; i++)
